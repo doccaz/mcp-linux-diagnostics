@@ -1,0 +1,11 @@
+O sistema está lento. Qual é a causa raiz?
+
+A CPU parece livre, mas tudo está travando. O que está acontecendo?
+
+Verifique se todos os serviços estão saudáveis.
+
+A conexão SSH está caindo e a rede parece instável. Analise a pilha de rede.
+
+Faça um diagnóstico geral do sistema.
+
+
