@@ -90,7 +90,7 @@ def check_kernel_dmesg() -> str:
     """
     dmesg_cmd = "dmesg | tail -500"
     
-    return run_cmd(f"echo '--- LAST 500 KERNEL MESSAGES ---' && {dmesg_cmd}"
+    return run_cmd(f"echo '--- LAST 500 KERNEL MESSAGES ---' && {dmesg_cmd}")
 
 @mcp.tool()
 def check_network_stack() -> str:
