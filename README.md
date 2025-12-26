@@ -14,3 +14,11 @@ The bash script stress_manager.sh is a simple tongue-in-cheek menu to start/stop
 
 The MCP server has read access to /etc, /proc, /sys, /var/log and /var/crash to examine files.
 
+## Using MCP
+
+As a demo, you can call:
+
+```
+# mcphost --config mcphost-diagnosis.json -p "diagnose my system, please!"
+```
+

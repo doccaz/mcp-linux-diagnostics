@@ -84,6 +84,15 @@ def check_kernel_internals() -> str:
                    f"echo '\n--- KERNEL MEMORY ---' && {mem_cmd}")
 
 @mcp.tool()
+def check_kernel_dmesg() -> str:
+    """
+    KERNEL MESSAGES: last 500 lines of dmesg.
+    """
+    dmesg_cmd = "dmesg | tail -500"
+    
+    return run_cmd(f"echo '--- LAST 500 KERNEL MESSAGES ---' && {dmesg_cmd}"
+
+@mcp.tool()
 def check_network_stack() -> str:
     """
     NETWORK STACK: Retransmissions (Loss) e Softnet (CPU Squeeze).
