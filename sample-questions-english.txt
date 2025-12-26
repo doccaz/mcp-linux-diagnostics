@@ -1,0 +1,10 @@
+The system is slow. What is the root cause?
+
+The CPU seems free, but everything is freezing. What's happening?
+
+Check if all services are healthy.
+
+The SSH connection is dropping and the network seems unstable. Analyze the network stack.
+
+Perform a general system diagnostic.
+
