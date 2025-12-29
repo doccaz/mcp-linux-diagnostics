@@ -4,6 +4,7 @@ import argparse
 import sys
 import logging
 import os
+import re
 from mcp.server.fastmcp import FastMCP
 
 parser = argparse.ArgumentParser(description="MCP Server for Advanced Linux Monitoring")
@@ -83,14 +84,63 @@ def check_kernel_internals() -> str:
                    f"echo '\n--- CONNTRACK (Firewall State) ---' && {conntrack_cmd} && "
                    f"echo '\n--- KERNEL MEMORY ---' && {mem_cmd}")
 
+def get_critical_dmesg_regex():
+    # We use verbose mode (re.X) to make the regex readable and commentable.
+    # The patterns are case-insensitive (re.I).
+    pattern = r"""
+        (
+            # 1. KERNEL PANIC & CRASHES
+            kernel\s+panic                  | # System has crashed
+            call\s+trace:                   | # Usually follows a kernel crash/oops
+            doing\s+fast\s+boot             | # Often follows a panic reset
+            
+            # 2. MEMORY ISSUES
+            out\s+of\s+memory               | # Standard OOM message
+            oom-killer                      | # Process killed to save memory
+            kill\s+process                  | # Context for OOM kills
+            page\s+allocation\s+failure     | # Kernel cannot allocate requested RAM
+            
+            # 3. FILESYSTEM & I/O ERRORS
+            i/o\s+error                     | # Generic Input/Output error
+            buffer\s+i/o\s+error            | # Disk write/read failure
+            ext[234]-fs\s+error             | # Ext filesystem corruption detected
+            xfs_error                       | # XFS filesystem corruption
+            btrfs:\s+error                  | # Btrfs filesystem corruption
+            journal\s+commit\s+i/o\s+error  | # Journaling failure (risk of data loss)
+            remounting\s+filesystem\s+read-only | # OS protecting itself from corruption
+            
+            # 4. HARDWARE FAILURES
+            mce:\s+\[hardware\s+error\]     | # Machine Check Exception (CPU/RAM hardware fail)
+            hard\s+resetting\s+link         | # SATA/Drive connection failure
+            temperature\s+above\s+threshold | # CPU/GPU overheating
+            critical\s+temperature          | # Thermal shutdown imminent
+            
+            # 5. SEGMENTATION FAULTS
+            segfault                        | # Application crashed due to memory violation
+            segmentation\s+fault              # Long form
+        )
+    """
+    
+    return re.compile(pattern, re.IGNORECASE | re.VERBOSE)
+
 @mcp.tool()
 def check_kernel_dmesg() -> str:
     """
-    KERNEL MESSAGES: last 500 lines of dmesg.
+    KERNEL MESSAGES: search for critical error messages in dmesg.
     """
-    dmesg_cmd = "dmesg | tail -500"
-    
-    return run_cmd(f"echo '--- LAST 500 KERNEL MESSAGES ---' && {dmesg_cmd}")
+
+    dmesg_cmd = "sudo dmesg"
+    log_lines =  run_cmd(f"{dmesg_cmd}")
+
+    critical_regex = get_critical_dmesg_regex()
+    output="--- Scanning Kernel Logs ---" + '\n'
+    for line in log_lines:
+        if critical_regex.search(line):
+            # We strip the timestamp for cleaner output in this example
+            output+=f"CRITICAL MATCH FOUND: {line.strip()}" + '\n'
+
+    output="--- Scan finished ---" + '\n'
+    return output
 
 @mcp.tool()
 def check_network_stack() -> str:
