@@ -12,6 +12,38 @@ parser.add_argument("-d", "--debug", action="store_true", help="Enable debug log
 parser.add_argument("-w", "--allow-write", action="store_true", help="Authorize write actions")
 args, unknown = parser.parse_known_args()
 
+# Compile regex ONCE globally for performance. 
+DMESG_PATTERN = re.compile(r"""
+    (?P<KERNEL_PANIC>           # Group Name: KERNEL_PANIC
+        kernel\s+panic|
+        call\s+trace:|
+        doing\s+fast\s+boot
+    )|
+    (?P<OOM_KILL>               # Group Name: OOM_KILL
+        out\s+of\s+memory|
+        oom-killer|
+        kill\s+process|
+        page\s+allocation\s+failure
+    )|
+    (?P<FILESYSTEM_CORRUPTION>  # Group Name: FILESYSTEM_CORRUPTION
+        i/o\s+error|
+        ext[234]-fs\s+error|
+        xfs_error|
+        btrfs:\s+error|
+        journal\s+commit\s+i/o\s+error|
+        remounting\s+filesystem\s+read-only
+    )|
+    (?P<HARDWARE_FAIL>          # Group Name: HARDWARE_FAIL
+        mce:\s+\[hardware\s+error\]|
+        hard\s+resetting\s+link|
+        critical\s+temperature
+    )|
+    (?P<SEGFAULT>               # Group Name: SEGFAULT
+        segfault|
+        segmentation\s+fault
+    )
+""", re.VERBOSE | re.IGNORECASE)
+
 # Logging
 logging.basicConfig(
     level=logging.DEBUG if args.debug else logging.WARNING,
@@ -22,11 +54,69 @@ logging.basicConfig(
 mcp = FastMCP("SLES-Super-Monitor")
 
 def run_cmd(command):
-    if args.debug: logging.debug(f"Executing: {command}")
     try:
-        return subprocess.check_output(command, shell=True, text=True, stderr=subprocess.STDOUT, timeout=5).strip()
+        output = subprocess.check_output(
+            command, 
+            shell=True, 
+            text=True, 
+            stderr=subprocess.STDOUT, 
+            timeout=5
+        )
+        return output.strip() # Strip manually here
     except Exception as e:
-        return f"Erro: {str(e)}"
+        # Return None or raise to handle errors cleanly later
+        print(f"Error running command: {e}")
+        return None
+
+def parse_dmesg_line(line):
+    # Use the globally compiled regex
+    match = DMESG_PATTERN.search(line)
+    if match:
+        return match.lastgroup
+    return None
+
+@mcp.tool()
+def check_kernel_dmesg() -> str:
+    """
+    KERNEL MESSAGES: search for critical error messages in dmesg.
+    """
+    
+    # Get the big string output
+    raw_output = run_cmd("sudo dmesg")
+    
+    if not raw_output:
+        print("No output from dmesg or permission denied.")
+        return
+
+    # CRITICAL FIX: Split the string into a list of lines
+    log_lines = raw_output.splitlines()
+
+    output = ["--- Scanning Kernel Logs ---"]
+    output.append(f"{'ERROR TYPE':<25} | {'LOG MESSAGE'}")
+    output.append("-" * 60)
+
+    found_error = False
+
+    for line in log_lines:
+        error_type = parse_dmesg_line(line)
+        
+        if error_type:
+            found_error = True
+            # Strip the line to remove extra newlines when printing
+            clean_line = line.strip()
+            
+            if error_type == "KERNEL_PANIC":
+                output.append(f"CRITICAL ALERT ({error_type}): {clean_line}")
+            elif error_type == "OOM_KILL":
+                output.append(f"Memory Issue   ({error_type}): {clean_line}")
+            else:
+                output.append(f"System Error   ({error_type}): {clean_line}")
+    
+    output.append("--- Scan finished ---")
+    
+    # Join list into final string for printing
+    final_output = "\n".join(output)
+    return final_output
 
 @mcp.tool()
 def get_system_overview() -> str:
@@ -83,64 +173,6 @@ def check_kernel_internals() -> str:
     return run_cmd(f"echo '--- ENTROPY (>1000 OK) ---' && {entropy_cmd} && "
                    f"echo '\n--- CONNTRACK (Firewall State) ---' && {conntrack_cmd} && "
                    f"echo '\n--- KERNEL MEMORY ---' && {mem_cmd}")
-
-def get_critical_dmesg_regex():
-    # We use verbose mode (re.X) to make the regex readable and commentable.
-    # The patterns are case-insensitive (re.I).
-    pattern = r"""
-        (
-            # 1. KERNEL PANIC & CRASHES
-            kernel\s+panic                  | # System has crashed
-            call\s+trace:                   | # Usually follows a kernel crash/oops
-            doing\s+fast\s+boot             | # Often follows a panic reset
-            
-            # 2. MEMORY ISSUES
-            out\s+of\s+memory               | # Standard OOM message
-            oom-killer                      | # Process killed to save memory
-            kill\s+process                  | # Context for OOM kills
-            page\s+allocation\s+failure     | # Kernel cannot allocate requested RAM
-            
-            # 3. FILESYSTEM & I/O ERRORS
-            i/o\s+error                     | # Generic Input/Output error
-            buffer\s+i/o\s+error            | # Disk write/read failure
-            ext[234]-fs\s+error             | # Ext filesystem corruption detected
-            xfs_error                       | # XFS filesystem corruption
-            btrfs:\s+error                  | # Btrfs filesystem corruption
-            journal\s+commit\s+i/o\s+error  | # Journaling failure (risk of data loss)
-            remounting\s+filesystem\s+read-only | # OS protecting itself from corruption
-            
-            # 4. HARDWARE FAILURES
-            mce:\s+\[hardware\s+error\]     | # Machine Check Exception (CPU/RAM hardware fail)
-            hard\s+resetting\s+link         | # SATA/Drive connection failure
-            temperature\s+above\s+threshold | # CPU/GPU overheating
-            critical\s+temperature          | # Thermal shutdown imminent
-            
-            # 5. SEGMENTATION FAULTS
-            segfault                        | # Application crashed due to memory violation
-            segmentation\s+fault              # Long form
-        )
-    """
-    
-    return re.compile(pattern, re.IGNORECASE | re.VERBOSE)
-
-@mcp.tool()
-def check_kernel_dmesg() -> str:
-    """
-    KERNEL MESSAGES: search for critical error messages in dmesg.
-    """
-
-    dmesg_cmd = "sudo dmesg"
-    log_lines =  run_cmd(f"{dmesg_cmd}")
-
-    critical_regex = get_critical_dmesg_regex()
-    output="--- Scanning Kernel Logs ---" + '\n'
-    for line in log_lines:
-        if critical_regex.search(line):
-            # We strip the timestamp for cleaner output in this example
-            output+=f"CRITICAL MATCH FOUND: {line.strip()}" + '\n'
-
-    output="--- Scan finished ---" + '\n'
-    return output
 
 @mcp.tool()
 def check_network_stack() -> str:
